@@ -6,6 +6,9 @@ import time
 
 __all__ = ['Result', 'Task']
 
+class TaskExit(Exception):
+    pass
+
 class Result(threading.Event):
     def __init__(self):
         self.value = None
@@ -50,9 +53,7 @@ class Result(threading.Event):
         raise TimeoutError('result timed out')
 
 class Task(object):
-    MANAGER = None
-    
-    def __init__(self, **kwargs):
+    def __init__(self, manager=None):
         from schizophrenia import manager
 
         self.manager = kwargs.setdefault('manager', self.MANAGER)
@@ -66,9 +67,19 @@ class Task(object):
         self.exception = None
         self.death = threading.Event()
 
+    @property
+    def pid(self):
+        if self.ready() or self.manager is None or not self.manager.has_task(self):
+            return None
+
+        return self.manager.get_pid(self)
+
     def link(self, result):
         if not isinstance(result, Result):
             raise ValueError('result must be a Result object')
+
+        if self.is_alive():
+            raise RuntimeError('cannot link to running task')
         
         self.result = result
         self.result.task = self
@@ -80,9 +91,9 @@ class Task(object):
         return not self.thread is None and self.thread.is_alive()
 
     def successful(self):
-        return self.is_alive() and not self.exception is None
+        return not self.thread is None and not self.thread.is_alive() and self.exception is None
 
-    def run(self, *args, **kwargs):
+    def prepare(self, *args, **kwargs):
         self.result.clear()
         self.thread = threading.Thread(target=self.task_runner
                                        ,args=args
@@ -92,13 +103,23 @@ class Task(object):
                                            ,id(self))
                                        ,daemon=True)
 
+    def start(self):
+        if self.manager and not self.manager.has_task(self):
+            self.manager.register_task(self)
+            
         self.thread.start()
-
         return self.result
+
+    def run(self, *args, **kwargs):
+        self.prepare(*args, **kwargs)
+        return self.start()
 
     def join(self, timeout=None):
         if self.thread is None:
             raise RuntimeError('no thread to join')
+
+        if not self.is_alive():
+            raise RuntimeError('thread is not alive to join')
 
         self.thread.join(timeout)
 
@@ -111,6 +132,8 @@ class Task(object):
     def task_runner(self, *args, **kwargs):
         try:
             self.result.set(self.task(*args, **kwargs))
+        except TaskExit:
+            self.result.set()
         except:
             self.exception = sys.exc_info()
             self.result.set()
