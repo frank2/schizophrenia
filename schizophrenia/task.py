@@ -9,11 +9,11 @@ __all__ = ['Result', 'Task']
 class TaskExit(Exception):
     pass
 
-class Result(threading.Event):
-    def __init__(self):
+class Result(threading._Event):
+    def __init__(self, verbose=None):
         self.value = None
         self.task = None
-        super(Result,self).__init__()
+        super(Result, self).__init__(verbose)
 
     def set(self, value=None):
         self.value = value
@@ -53,10 +53,10 @@ class Result(threading.Event):
         raise TimeoutError('result timed out')
 
 class Task(object):
-    def __init__(self, manager=None):
+    def __init__(self, manager_obj=None):
         from schizophrenia import manager
 
-        self.manager = kwargs.setdefault('manager', self.MANAGER)
+        self.manager = manager_obj
 
         if not self.manager is None and not isinstance(self.manager, manager.Manager):
             raise ValueError('manager must be a Manager object')
@@ -73,6 +73,18 @@ class Task(object):
             return None
 
         return self.manager.get_pid(self)
+
+    @property
+    def thread_name(self):
+        return '{}#{:08x}'.format(self.__class__.__name__, id(self))
+
+    def bind(self, manager_obj):
+        from schizophrenia import manager
+
+        if not isinstance(manager_obj, manager.Manager):
+            raise ValueError('manager must be a Manager object')
+
+        self.manager = manager_obj
 
     def link(self, result):
         if not isinstance(result, Result):
@@ -94,14 +106,15 @@ class Task(object):
         return not self.thread is None and not self.thread.is_alive() and self.exception is None
 
     def prepare(self, *args, **kwargs):
+        if not self.ready():
+            raise RuntimeError("cannot prepare a task that's not ready")
+
         self.result.clear()
         self.thread = threading.Thread(target=self.task_runner
                                        ,args=args
                                        ,kwargs=kwargs
-                                       ,name='{}#{:08x}'.format(
-                                           self.__class__.__name__
-                                           ,id(self))
-                                       ,daemon=True)
+                                       ,name=self.thread_name)
+        self.thread.daemon = True
 
     def start(self):
         if self.manager and not self.manager.has_task(self):
@@ -123,6 +136,18 @@ class Task(object):
 
         self.thread.join(timeout)
 
+    @classmethod
+    def join_all(self, *tasks):
+        for task in tasks:
+            if task is None:
+                continue
+
+            if not isinstance(task, Task):
+                raise ValueError('task must be a Task object')
+
+        for task in tasks:
+            task.join()
+
     def kill(self):
         self.death.set()
 
@@ -143,3 +168,9 @@ class Task(object):
 
     def __call__(self, *args, **kwargs):
         return self.run(*args, **kwargs)
+
+    def __repr__(self):
+        if self.pid is None:
+            return '<{}>'.format(self.thread_name)
+        else:
+            return '<{}: {}>'.format(self.thread_name, repr(self.pid))

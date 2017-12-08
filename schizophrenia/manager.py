@@ -2,6 +2,7 @@
 
 import threading
 import types
+import time
 
 from schizophrenia.task import Task
 
@@ -32,6 +33,19 @@ class PID(object):
 
         self.task.join(timeout)
 
+    @classmethod
+    def join_all(self, *pids):
+        for pid in pids:
+            if pid is None:
+                continue
+
+            if not isinstance(pid, PID):
+                raise ValueError('pid must be a PID object')
+
+        for pid in pids:
+            print('Joining PID {}'.format(pid))
+            pid.join()
+
     def kill(self):
         if self.task is None:
             raise RuntimeError('no task to kill')
@@ -53,12 +67,16 @@ class PID(object):
     def __eq__(self, other):
         return int(other) == int(self)
 
-class Manager(Task):
+    def __repr__(self):
+        if self.task is None:
+            return '<PID:{}>'.format(self.pid)
+        else:
+            return '<PID:{} {}>'.format(self.pid, self.task.thread_name)
+
+class Manager(object):
     MAX_PID = 2 ** 32
     
     def __init__(self):
-        super(Task, self).__init__()
-
         self.modules = dict()
         self.tasks = dict()
         self.pids = dict()
@@ -68,11 +86,14 @@ class Manager(Task):
         self.pid_event = threading.Event()
 
         self.load_module('schizophrenia')
-        self.launch_task('schizophrenia.manager.TaskMonitor')
+        # self.launch_task('schizophrenia.manager.TaskMonitor')
 
     def load_module(self, module, load_as=None):
         if '.' in module and load_as is None:
             raise ValueError('submodules should not be loaded without an alias')
+
+        if load_as is None:
+            load_as = module
 
         self.modules[load_as] = __import__(module)
 
@@ -130,17 +151,22 @@ class Manager(Task):
 
         return task_class
 
-    def create_task(self, task_name, *args, **kwargs):
-        kwargs['manager'] = self
+    def create_task(self, task_name):
         task_class = self.load_task(task_name)
-        obj = task_class(*args, **kwargs)
+        obj = task_class(self)
 
         return obj
 
     def register_task(self, task_obj):
-        self.pid_event.clear()
-        
+        print('getting pid lock')
+        import traceback
+        traceback.print_stack()
         with self.pid_lock:
+            self.pid_event.clear()
+
+            if task_obj in self.tasks:
+                raise RuntimeError('task already registered with manager')
+
             while self.pid in self.pids:
                 self.pid += 1
 
@@ -152,7 +178,7 @@ class Manager(Task):
             self.pids[pid_obj] = task_obj
             self.tasks[task_obj] = pid_obj
 
-        self.pid_event.set()
+            self.pid_event.set()
 
         return pid_obj
 
@@ -161,28 +187,28 @@ class Manager(Task):
         task_obj.run(*args, **kwargs)
         return pid_obj
 
-    def has_pid(self, pid):
-        self.pid_event.wait()
+    def wait_for_pids(self):
+        if not self.pid_lock.acquire(False):
+            self.pid_event.wait()
 
+    def has_pid(self, pid):
+        self.wait_for_pids()
         return pid in self.pids
 
     def has_task(self, task):
-        self.pid_event.wait()
-
+        self.wait_for_pids()
         return task in self.tasks
 
     def get_pid(self, task):
         if not self.has_task(task):
             return
 
-        self.pid_event.wait()
-        
+        self.wait_for_pids()
         return self.tasks[task]
 
     def get_task(self, pid):
         if not self.has_pid(pid):
             return
 
-        self.pid_event.wait()
-        
+        self.wait_for_pids()        
         return self.pids[pid]

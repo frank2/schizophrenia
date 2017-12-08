@@ -1,2 +1,4 @@
 * Roadmap
-** Create the Task object
+** Create the Task object [done]
+** Create the Manager object [done]
+** Task can be spawned independent of manager
