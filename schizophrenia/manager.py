@@ -21,7 +21,7 @@ def set_manager(manager):
 
     MANAGER = manager
 
-from schizophrenia.result import Result
+from schizophrenia.result import Result, WouldBlockError
 from schizophrenia.task import Task
 
 __all__ = ['ClosedPipeError', 'PID', 'Pipe', 'PipeEnd', 'Manager', 'find_manager', 'set_manager']
@@ -135,9 +135,7 @@ class Pipe(object):
 
     def close(self):
         self.one.send = None
-        self.one.recv = None
         self.two.send = None
-        self.two.recv = None
         self.key = None
         self.mapping = None
 
@@ -152,17 +150,26 @@ class PipeEnd(object):
         else:
             raise ValueError('both send and recv must be None or not None simultaneously')
 
-    def put(self, item, block=False, timeout=None):
+    def put(self, item, timeout=None):
         if self.send is None:
             raise ClosedPipeError('the pipe is closed')
         
-        self.send.put(item, block, timeout)
+        self.send.put(item, timeout=timeout)
 
-    def get(self, block=False, timeout=None):
-        if self.recv is None:
-            raise ClosedPipeError('the pipe is closed')
+    def get(self, block=True, timeout=None):
+        if self.send is None:
+            if self.empty():
+                raise ClosedPipeError('pipe is closed with empty receive buffer')
+
+            return self.recv.get()
         
         return self.recv.get(block, timeout)
+
+    def closed(self):
+        return self.send is None
+
+    def empty(self):
+        return self.recv.empty()
 
 class Manager(object):
     MAX_PID = 2 ** 16
@@ -171,13 +178,13 @@ class Manager(object):
         self.modules = dict()
         self.tasks = dict()
         self.pids = dict()
+
         self.pipes = dict()
         self.pipe_ends = dict()
-        self.pipe_waits = dict()
+        self.pipe_lock = threading.RLock()
 
         self.pid = 0
         self.pid_lock = threading.RLock()
-        self.pipe_lock = threading.RLock()
 
         self.load_module('schizophrenia')
 
@@ -283,7 +290,7 @@ class Manager(object):
                 ends = self.pipe_ends[pid_obj]
 
                 for end in list(ends)[:]:
-                    self.close_pipe_end(pid_obj, end)
+                    self.close_pipe(pid_obj, end)
 
     def launch_task(self, task_obj, *args, **kwargs):
         pid_obj = self.register_task(task_obj)
@@ -347,35 +354,22 @@ class Manager(object):
             raise RuntimeError('no such pid: {}'.format(repr(first)))
 
         if self.has_pipe_connection(first, second):
-            print('Found pipe.')
             return self.get_pipe(first, second)
             
         pipe = Pipe(first, second)
+        ends = list(pipe.key)
 
         with self.pipe_lock:
             self.pipes[pipe.key] = pipe
 
-            ends = list(pipe.key)
-            print(len(ends), pipe.key, first, second)
             self.pipe_ends.setdefault(ends[0], set()).add(ends[1])
             self.pipe_ends.setdefault(ends[1], set()).add(ends[0])
 
-        with self.pipe_lock:
-            if first in self.pipe_waits:
-                for_pid, result = self.pipe_waits[first]
-
-                if for_pid is None or for_pid == second:
-                    result.set(pipe.mapping[first])
-                    del self.pipe_waits[first]
-
-        with self.pipe_lock:
-            if second in self.pipe_waits:
-                print('Notifying {}'.format(second))
-                for_pid, result = self.pipe_waits[second]
-
-                if for_pid is None or for_pid == first:
-                    result.set(pipe.mapping[second])
-                    del self.pipe_waits[second]
+        if ends[0].task:
+            ends[0].task.on_new_pipe(ends[1], pipe)
+            
+        if ends[1].task:
+            ends[1].task.on_new_pipe(ends[0], pipe)
 
         return pipe
 
@@ -429,32 +423,23 @@ class Manager(object):
 
         return pipe.mapping[pid_to]
 
-    def wait_for_pipe(self, pid, from_pid=None):
-        pipe_result = Result()
-        
-        with self.pipe_lock:
-            self.pipe_waits[pid] = (from_pid, pipe_result)
+    def close_pipe(self, pid_from, pid_to):
+        pipe_key = frozenset([pid_from, pid_to])
 
-        return pipe_result
-
-    def close_pipe_end(self, pid_from, pid_to):
-        if not isinstance(pid_from, PID):
-            raise ValueError('pid must be a PID object')
-
-        if not isinstance(pid_to, PID):
-            raise ValueError('pid must be a PID object')
-        
-        key = frozenset([pid_from, pid_to])
-        self.close_pipe(key)
-
-    def close_pipe(self, pipe_key):
         with self.pipe_lock:
             if not pipe_key in self.pipes:
                 raise ValueError('no such pipe with key {}'.format(pipe_key))
 
             pipe = self.pipes[pipe_key]
             pipe.close()
+
             pid_one, pid_two = list(pipe_key)
+
+            if not pid_one.task is None:
+                pid_one.task.on_close_pipe(pid_two, pipe)
+
+            if not pid_two.task is None:
+                pid_two.task.on_close_pipe(pid_one, pipe)
 
             self.pipe_ends[pid_one].remove(pid_two)
 

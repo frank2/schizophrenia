@@ -76,11 +76,12 @@ class Task(object):
         self.started = threading.Event()
         self.exception = None
         self.death = threading.Event()
-        self.trigger_queue = queue.Queue()
+        self.pipes = dict()
+        self.pipe_lock = threading.RLock()
 
     @property
     def pid(self):
-        if self.ready() or self.manager is None or not self.manager.has_task(self):
+        if self.ready() or not self.manager.has_task(self):
             return None
 
         return self.manager.get_pid(self)
@@ -88,6 +89,42 @@ class Task(object):
     @property
     def thread_name(self):
         return '{}#{:08x}'.format(self.__class__.__name__, id(self))
+
+    def on_new_pipe(self, pid, pipe):
+        with self.pipe_lock:
+            if self.pid is None: # task died before the pipe could be registered
+                return
+
+            pipe_end = pipe.mapping[self.pid]
+            self.pipes[pid] = pipe_end
+
+    def on_close_pipe(self, pid, pipe):
+        with self.pipe_lock:
+            if pid in self.pipes:
+                del self.pipes[pid]
+
+    def get_pipe(self, pid):
+        with self.pipe_lock:
+            return self.pipes.get(pid, None)
+
+    def get_pipes(self):
+        with self.pipe_lock:
+            return dict(list(self.pipes.items())[:])
+
+    def has_pipe(self, pid):
+        with self.pipe_lock:
+            return pid in self.pipes
+
+    def create_pipe(self, pid):
+        if not self.is_alive():
+            raise RuntimeError('cannot create a pipe on a dead task')
+
+        pipe = self.manager.create_pipe(self.pid, pid)
+        return pipe.mapping[self.pid]
+        
+    def close_pipe(self, pid):
+        if self.has_pipe(pid):
+            self.manager.close_pipe(self.pid, pid)
 
     def bind(self, manager_obj):
         if not isinstance(manager_obj, manager.Manager):
@@ -175,8 +212,13 @@ class Task(object):
         return self.death.is_set()
 
     def dead(self):
+        if not self.is_dead():
+            return
+
         if not self.exception is None:
             raise self.exception
+        else:
+            raise TaskExit('task received a death event')
 
     def get(self, blocking=True, timeout=None):
         return self.result.get(blocking=blocking, timeout=timeout)
@@ -217,31 +259,8 @@ class Task(object):
     def task(self, *args, **kwargs):
         raise NotImplementedError('task undefined')
 
-    def wait_for_pipe(self, from_pid=None):
-        if not self.is_alive():
-            raise RuntimeError('cannot wait for pipe when not running')
-
-        if not self.manager:
-            raise ValueError('cannot wait for pipe without a task manager')
-
-        if from_pid is None and self.manager.has_pipe(self.pid):
-            ends = self.manager.get_ends(self.pid)
-            return self.manager.get_pipe(self.pid, list(ends)[0]).mapping[self.pid]
-        if from_pid and self.manager.has_pipe_connection(self.pid, from_pid):
-            return self.manager.get_pipe(self.pid, from_pid).mapping[self.pid]
-        else:
-            return self.manager.wait_for_pipe(self.pid, from_pid)
-
     def wait_for_start(self, timeout=None):
         self.started.wait(timeout)
-
-    def get_pipe(self, from_pid=None):
-        result = self.wait_for_pipe(from_pid)
-
-        if isinstance(result, Result):
-            return result.get()
-        else:
-            return result
 
     def __call__(self, *args, **kwargs):
         return self.run(*args, **kwargs)
