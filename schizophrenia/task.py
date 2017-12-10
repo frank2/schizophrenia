@@ -77,54 +77,51 @@ class Task(object):
         self.exception = None
         self.death = threading.Event()
         self.pipes = dict()
-        self.pipe_lock = threading.RLock()
 
     @property
-    def pid(self):
+    def tid(self):
         if self.ready() or not self.manager.has_task(self):
             return None
 
-        return self.manager.get_pid(self)
+        return self.manager.get_tid(self)
 
     @property
     def thread_name(self):
         return '{}#{:08x}'.format(self.__class__.__name__, id(self))
 
-    def on_new_pipe(self, pid, pipe):
-        with self.pipe_lock:
-            if self.pid is None: # task died before the pipe could be registered
-                return
+    def on_new_pipe(self, tid, pipe):
+        if self.tid is None: # task died before the pipe could be registered
+            return
 
-            pipe_end = pipe.mapping[self.pid]
-            self.pipes[pid] = pipe_end
+        pipe_end = pipe.mapping[self.tid]
+        self.pipes[tid] = pipe_end
 
-    def on_close_pipe(self, pid, pipe):
-        with self.pipe_lock:
-            if pid in self.pipes:
-                del self.pipes[pid]
+    def on_close_pipe(self, tid, pipe):
+        if tid in self.pipes:
+            del self.pipes[tid]
 
-    def get_pipe(self, pid):
-        with self.pipe_lock:
-            return self.pipes.get(pid, None)
+    def get_pipe(self, tid):
+        #with self.pipe_lock:
+        return self.pipes.get(tid, None)
 
     def get_pipes(self):
-        with self.pipe_lock:
-            return dict(list(self.pipes.items())[:])
+        #with self.pipe_lock:
+        return dict(list(self.pipes.items())[:])
 
-    def has_pipe(self, pid):
-        with self.pipe_lock:
-            return pid in self.pipes
+    def has_pipe(self, tid):
+        #with self.pipe_lock:
+        return not self.pipes.get(tid, None) is None
 
-    def create_pipe(self, pid):
+    def create_pipe(self, tid):
         if not self.is_alive():
             raise RuntimeError('cannot create a pipe on a dead task')
 
-        pipe = self.manager.create_pipe(self.pid, pid)
-        return pipe.mapping[self.pid]
+        pipe = self.manager.create_pipe(self.tid, tid)
+        return pipe.mapping[self.tid]
         
-    def close_pipe(self, pid):
-        if self.has_pipe(pid):
-            self.manager.close_pipe(self.pid, pid)
+    def close_pipe(self, tid):
+        if self.has_pipe(tid):
+            self.manager.close_pipe(self.tid, tid)
 
     def bind(self, manager_obj):
         if not isinstance(manager_obj, manager.Manager):
@@ -265,11 +262,27 @@ class Task(object):
     def wait_for_start(self, timeout=None):
         self.started.wait(timeout)
 
+    def sleep(self, timeout):
+        current_time = time.time()
+        end_time = time.time() + timeout
+        delta = end_time - current_time
+
+        if delta <= 0.001:
+            sleep_rate = 0.0001
+        elif delta <= 0.01:
+            sleep_rate = 0.001
+        else:
+            sleep_rate = 0.01
+
+        while time.time() < end_time:
+            self.dead()
+            time.sleep(sleep_rate)
+
     def __call__(self, *args, **kwargs):
         return self.run(*args, **kwargs)
 
     def __repr__(self):
-        if self.pid is None:
+        if self.tid is None:
             return '<{}>'.format(self.thread_name)
         else:
-            return '<{}: PID:{}>'.format(self.thread_name, repr(self.pid.pid))
+            return '<{}: TID:{}>'.format(self.thread_name, repr(self.tid.tid))

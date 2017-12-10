@@ -24,37 +24,23 @@ def set_manager(manager):
 from schizophrenia.result import Result, WouldBlockError
 from schizophrenia.task import Task
 
-__all__ = ['ClosedPipeError', 'PID', 'Pipe', 'PipeEnd', 'Manager', 'find_manager', 'set_manager']
-
-class DebuggableRLock(threading._RLock):
-    def acquire(self, blocking=True, timeout=-1):
-        print('thread {} wants lock {} owned by {}'.format(threading.get_ident(), id(self), self._owner))
-        result = super(DebuggableRLock, self).acquire(blocking, timeout)
-        print('thread {} got lock result {}'.format(threading.get_ident(), result))
-
-    def release(self, *args):
-        if self._owner == threading.get_ident():
-            print('thread {} released lock {}'.format(threading.get_ident(), id(self)))
-            
-        super(DebuggableRLock, self).release(*args)
-
-    __enter__ = acquire
+__all__ = ['ClosedPipeError', 'TID', 'Pipe', 'PipeEnd', 'Manager', 'find_manager', 'set_manager']
     
 class ClosedPipeError(Exception):
     pass
 
-class PID(object):
-    def __init__(self, manager_obj, pid):
+class TID(object):
+    def __init__(self, manager_obj, tid):
         self.manager = manager_obj
 
         if not self.manager is None and not isinstance(self.manager, Manager):
             raise ValueError('manager must be a Manager object')
 
-        self.pid = pid
+        self.tid = tid
 
     @property
     def task(self):
-        if not self.manager.has_pid(self):
+        if not self.manager.has_tid(self):
             return
         
         return self.manager.get_task(self)
@@ -70,22 +56,22 @@ class PID(object):
         self.task.join(timeout)
 
     @classmethod
-    def join_all(klass, *pids):
-        for pid in pids:
-            if pid is None:
+    def join_all(klass, *tids):
+        for tid in tids:
+            if tid is None:
                 continue
 
-            if not isinstance(pid, PID):
-                raise ValueError('pid must be a PID object')
+            if not isinstance(tid, TID):
+                raise ValueError('tid must be a TID object')
 
-        for pid in pids:
-            if pid is None:
+        for tid in tids:
+            if tid is None:
                 continue
             
-            if not pid.is_alive():
+            if not tid.is_alive():
                 continue
             
-            pid.join()
+            tid.join()
 
     def kill(self, exception=None):
         if self.task is None:
@@ -110,25 +96,25 @@ class PID(object):
         return task.get(blocking=blocking, timeout=timeout)
 
     @classmethod
-    def get_all(klass, *pids, blocking=True, timeout=None):
+    def get_all(klass, *tids, blocking=True, timeout=None):
         tasks = list()
         
-        for pid in pids:
-            if pid is None:
+        for tid in tids:
+            if tid is None:
                 continue
 
-            if not isinstance(pid, PID):
-                raise ValueError('pid must be a PID object')
+            if not isinstance(tid, TID):
+                raise ValueError('tid must be a TID object')
 
-            tasks.append(pid.task)
+            tasks.append(tid.task)
 
         return Task.get_all(*tasks, blocking=blocking, timeout=timeout)
 
     def __hash__(self):
-        return hash(self.pid)
+        return hash(self.tid)
 
     def __int__(self):
-        return self.pid
+        return self.tid
 
     def __eq__(self, other):
         return int(other) == int(self)
@@ -137,22 +123,22 @@ class PID(object):
         task = self.task
 
         if task is None:
-            return '<PID:{}>'.format(self.pid)
+            return '<TID:{}>'.format(self.tid)
         else:
-            return '<PID:{} {}>'.format(self.pid, task.thread_name)
+            return '<TID:{} {}>'.format(self.tid, task.thread_name)
         
 class Pipe(object):
-    def __init__(self, pid_one, pid_two):
-        self.open(pid_one, pid_two)
+    def __init__(self, tid_one, tid_two):
+        self.open(tid_one, tid_two)
 
-    def open(self, pid_one, pid_two):
-        if not isinstance(pid_one, PID) or not isinstance(pid_two, PID):
-            raise ValueError('pid must be a PID object')
+    def open(self, tid_one, tid_two):
+        if not isinstance(tid_one, TID) or not isinstance(tid_two, TID):
+            raise ValueError('tid must be a TID object')
 
         self.one = PipeEnd()
         self.two = PipeEnd(send=self.one.recv, recv=self.one.send)
-        self.key = frozenset([pid_one, pid_two])
-        self.mapping = {pid_one: self.one, pid_two: self.two}
+        self.key = frozenset([tid_one, tid_two])
+        self.mapping = {tid_one: self.one, tid_two: self.two}
 
     def close(self):
         self.one.send = None
@@ -174,7 +160,7 @@ class PipeEnd(object):
         if self.send is None:
             raise ClosedPipeError('the pipe is closed')
         
-        self.send.put(item, timeout=timeout)
+        self.send.put(item, block=False, timeout=timeout)
 
     def get(self, block=True, timeout=None):
         if self.send is None:
@@ -192,21 +178,17 @@ class PipeEnd(object):
         return self.recv.empty()
 
 class Manager(object):
-    MAX_PID = 2 ** 16
+    MAX_TID = 2 ** 16
     
     def __init__(self):
-        global PID_LOCK
-
         self.modules = dict()
         self.tasks = dict()
-        self.pids = dict()
+        self.tids = dict()
 
         self.pipes = dict()
         self.pipe_ends = dict()
-        self.pipe_lock = DebuggableRLock()
 
-        self.pid = 0
-        self.pid_lock = DebuggableRLock()
+        self.tid = 0
 
         self.load_module('schizophrenia')
 
@@ -280,50 +262,41 @@ class Manager(object):
         return obj
 
     def register_task(self, task_obj):
-        with self.pid_lock:
-            #print('pid_lock owner: {}'.format(self.pid_lock._owner))
+        if task_obj in self.tasks:
+            raise RuntimeError('task already registered with manager')
 
-            if task_obj in self.tasks:
-                raise RuntimeError('task already registered with manager')
+        while self.tid in self.tids:
+            self.tid += 1
 
-            while self.pid in self.pids:
-                self.pid += 1
+            if self.tid >= self.MAX_TID:
+                self.tid = 0
 
-                if self.pid >= self.MAX_PID:
-                    self.pid = 0
-
-            pid_obj = PID(self, self.pid)
+        tid_obj = TID(self, self.tid)
             
-            self.pids[pid_obj] = task_obj
-            self.tasks[task_obj] = pid_obj
+        self.tids[tid_obj] = task_obj
+        self.tasks[task_obj] = tid_obj
 
-        return pid_obj
+        return tid_obj
 
     def unregister_task(self, task_obj):
-        with self.pid_lock:
-            #print('pid_lock owner: {}'.format(self.pid_lock._owner))
+        if not task_obj in self.tasks:
+            raise RuntimeError('task not registered with manager')
 
-            if not task_obj in self.tasks:
-                raise RuntimeError('task not registered with manager')
+        tid_obj = self.tasks[task_obj]
 
-            pid_obj = self.tasks[task_obj]
+        del self.tids[tid_obj]
+        del self.tasks[task_obj]
 
-            del self.pids[pid_obj]
-            del self.tasks[task_obj]
+        if tid_obj in self.pipe_ends:
+            ends = self.pipe_ends[tid_obj]
 
-        with self.pipe_lock:
-            #print('pipe_lock owner: {}'.format(self.pipe_lock._owner))
-
-            if pid_obj in self.pipe_ends:
-                ends = self.pipe_ends[pid_obj]
-
-                for end in list(ends)[:]:
-                    self.close_pipe(pid_obj, end)
+            for end in list(ends)[:]:
+                self.close_pipe(tid_obj, end)
 
     def launch_task(self, task_obj, *args, **kwargs):
-        pid_obj = self.register_task(task_obj)
+        tid_obj = self.register_task(task_obj)
         task_obj.run(*args, **kwargs)
-        return pid_obj
+        return tid_obj
 
     def spawn_task(self, task_name, *args, **kwargs):
         return self.launch_task(self.create_task(task_name), *args, **kwargs)
@@ -332,74 +305,36 @@ class Manager(object):
         task_obj = self.create_task(task_name)
         task_obj.run_after(timeout, *args, **kwargs)
 
-    def has_pid(self, pid):
-        with self.pid_lock:
-            #print('pid_lock owner: {}'.format(self.pid_lock._owner))
-        
-            result = pid in self.pids
-
-        return result
+    def has_tid(self, tid):
+        return not self.tids.get(tid, None) is None
 
     def has_task(self, task):
-        with self.pid_lock:
-            #print('pid_lock owner: {}'.format(self.pid_lock._owner))
+        return not self.tasks.get(task, None) is None
 
-            result = task in self.tasks
+    def get_tid(self, task):
+        return self.tasks.get(task, None)
 
-        return result
+    def get_task(self, tid):
+        return self.tids.get(tid, None)
 
-    def get_pid(self, task):
-        result = None
-
-        with self.pid_lock:
-            #print('pid_lock owner: {}'.format(self.pid_lock._owner))
-
-            if self.has_task(task):
-                if task in self.tasks:
-                    result = self.tasks[task]
-
-        return result
-
-    def get_task(self, pid):
-        result = None
-
-        with self.pid_lock:
-            #print('pid_lock owner: {}'.format(self.pid_lock._owner))
-
-            if self.has_pid(pid):
-                if pid in self.pids:
-                    result = self.pids[pid]
-
-        return result
-
-    def get_pids(self):
-        with self.pid_lock:
-            #print('pid_lock owner: {}'.format(self.pid_lock._owner))
-
-            result = list(self.pids.keys())
-
-        return result
+    def get_tids(self):
+        return list(self.tids.keys())
 
     def get_tasks(self):
-        with self.pid_lock:
-            #print('pid_lock owner: {}'.format(self.pid_lock._owner))
-
-            result = list(self.tasks.keys())
-
-        return result
+        return list(self.tasks.keys())
 
     def create_pipe(self, first, second):
-        if not isinstance(first, PID):
-            raise ValueError('expected a pid for the first argument')
+        if not isinstance(first, TID):
+            raise ValueError('expected a tid for the first argument')
         
-        if not isinstance(second, PID):
-            raise ValueError('expected a pid for the second argument')
+        if not isinstance(second, TID):
+            raise ValueError('expected a tid for the second argument')
 
-        if not self.has_pid(first):
-            raise RuntimeError('no such pid: {}'.format(repr(first)))
+        if not self.has_tid(first):
+            raise RuntimeError('no such tid: {}'.format(repr(first)))
 
-        if not self.has_pid(second):
-            raise RuntimeError('no such pid: {}'.format(repr(first)))
+        if not self.has_tid(second):
+            raise RuntimeError('no such tid: {}'.format(repr(first)))
 
         if self.has_pipe_connection(first, second):
             return self.get_pipe(first, second)
@@ -407,11 +342,10 @@ class Manager(object):
         pipe = Pipe(first, second)
         ends = list(pipe.key)
 
-        with self.pipe_lock:
-            self.pipes[pipe.key] = pipe
+        self.pipes[pipe.key] = pipe
 
-            self.pipe_ends.setdefault(ends[0], set()).add(ends[1])
-            self.pipe_ends.setdefault(ends[1], set()).add(ends[0])
+        self.pipe_ends.setdefault(ends[0], set()).add(ends[1])
+        self.pipe_ends.setdefault(ends[1], set()).add(ends[0])
 
         if ends[0].task:
             ends[0].task.on_new_pipe(ends[1], pipe)
@@ -421,92 +355,76 @@ class Manager(object):
 
         return pipe
 
-    def has_pipe(self, pid):
-        if not isinstance(pid, PID):
-            raise ValueError('pid must be a PID object')
+    def has_pipe(self, tid):
+        if not isinstance(tid, TID):
+            raise ValueError('tid must be a TID object')
 
-        with self.pipe_lock:
-            result = pid in self.pipe_ends
+        return not self.pipe_ends.get(tid, None) is None
 
-        return result
+    def has_pipe_connection(self, tid_one, tid_two):
+        if not isinstance(tid_one, TID):
+            raise ValueError('tid must be a TID object')
 
-    def has_pipe_connection(self, pid_one, pid_two):
-        if not isinstance(pid_one, PID):
-            raise ValueError('pid must be a PID object')
+        if not isinstance(tid_two, TID):
+            raise ValueError('tid must be a TID object')
 
-        if not isinstance(pid_two, PID):
-            raise ValueError('pid must be a PID object')
+        return not self.pipes.get(frozenset([tid_one, tid_two]), None) is None
 
-        with self.pipe_lock:
-            result = frozenset([pid_one, pid_two]) in self.pipes
+    def get_pipe(self, tid_one, tid_two):
+        if not isinstance(tid_one, TID):
+            raise ValueError('tid must be a TID object')
 
-        return result
+        if not isinstance(tid_two, TID):
+            raise ValueError('tid must be a TID object')
 
-    def get_pipe(self, pid_one, pid_two):
-        if not isinstance(pid_one, PID):
-            raise ValueError('pid must be a PID object')
+        key = frozenset([tid_one, tid_two])
+        pipe = self.pipes.get(key, None)
 
-        if not isinstance(pid_two, PID):
-            raise ValueError('pid must be a PID object')
+        if pipe is None:
+            raise ValueError('no such pipe with key {}'.format(key))
 
-        key = frozenset([pid_one, pid_two])
+        return pipe
 
-        with self.pipe_lock:
-            if not key in self.pipes:
-                raise ValueError('no such pipe with key {}'.format(key))
+    def get_ends(self, tid):
+        return self.pipe_ends.get(tid, None)
 
-            result = self.pipes[key]
+    def get_end(self, tid_from, tid_to):
+        if not isinstance(tid_from, TID):
+            raise ValueError('tid must be a TID object')
 
-        return result
+        if not isinstance(tid_to, TID):
+            raise ValueError('tid must be a TID object')
 
-    def get_ends(self, pid):
-        with self.pipe_lock:
-            if not self.has_pipe(pid):
-                raise ValueError('no pipe end for PID {}'.format(repr(pid)))
+        pipe = self.get_pipe(tid_from, tid_to)
+        return pipe.mapping[tid_to]
 
-            result = self.pipe_ends[pid]
+    def close_pipe(self, tid_from, tid_to):
+        pipe_key = frozenset([tid_from, tid_to])
+        pipe = self.pipes.get(pipe_key, None)
 
-        return result
+        if pipe is None:
+            raise ValueError('no such pipe with key {}'.format(pipe_key))
 
-    def get_end(self, pid_from, pid_to):
-        if not isinstance(pid_from, PID):
-            raise ValueError('pid must be a PID object')
+        pipe.close()
+            
+        tid_one, tid_two = list(pipe_key)
+        tid_one_task = tid_one.task
+        tid_two_task = tid_two.task
+        
+        if not tid_one_task is None:
+            tid_one_task.on_close_pipe(tid_two, pipe)
 
-        if not isinstance(pid_to, PID):
-            raise ValueError('pid must be a PID object')
+        if not tid_two_task is None:
+            tid_two_task.on_close_pipe(tid_one, pipe)
 
-        pipe = self.get_pipe(pid_from, pid_to)
+        self.pipe_ends[tid_one].remove(tid_two)
 
-        return pipe.mapping[pid_to]
+        if len(self.pipe_ends[tid_one]) == 0:
+            del self.pipe_ends[tid_one]
 
-    def close_pipe(self, pid_from, pid_to):
-        pipe_key = frozenset([pid_from, pid_to])
+        self.pipe_ends[tid_two].remove(tid_one)
 
-        with self.pipe_lock:
-            if not pipe_key in self.pipes:
-                raise ValueError('no such pipe with key {}'.format(pipe_key))
-
-            pipe = self.pipes[pipe_key]
-            pipe.close()
-
-            pid_one, pid_two = list(pipe_key)
-            pid_one_task = pid_one.task
-            pid_two_task = pid_two.task
-
-            if not pid_one_task is None:
-                pid_one_task.on_close_pipe(pid_two, pipe)
-
-            if not pid_two_task is None:
-                pid_two_task.on_close_pipe(pid_one, pipe)
-
-            self.pipe_ends[pid_one].remove(pid_two)
-
-            if len(self.pipe_ends[pid_one]) == 0:
-                del self.pipe_ends[pid_one]
-
-            self.pipe_ends[pid_two].remove(pid_one)
-
-            if len(self.pipe_ends[pid_two]) == 0:
-                del self.pipe_ends[pid_two]
+        if len(self.pipe_ends[tid_two]) == 0:
+            del self.pipe_ends[tid_two]
 
 MANAGER = Manager()
