@@ -265,16 +265,20 @@ class Manager(object):
         if task_obj in self.tasks:
             raise RuntimeError('task already registered with manager')
 
-        while self.tid in self.tids:
-            self.tid += 1
+        tid = self.tid
 
-            if self.tid >= self.MAX_TID:
-                self.tid = 0
+        while tid in self.tids:
+            tid += 1
+
+            if tid >= self.MAX_TID:
+                tid = 0
 
         tid_obj = TID(self, self.tid)
             
         self.tids[tid_obj] = task_obj
         self.tasks[task_obj] = tid_obj
+
+        self.tid = tid
 
         return tid_obj
 

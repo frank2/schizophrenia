@@ -34,7 +34,7 @@ class Result(threading.Event):
 
     def set_exception(self, exception=None):
         if not exception is None:
-            self.exception = exception
+            self.exception = (None, exception, None)
         else:
             self.exception = sys.exc_info()
 
