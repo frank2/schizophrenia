@@ -205,8 +205,11 @@ class Task(object):
         self.death.set()
 
     def die(self, exception=None):
-        self.kill(exception)
-        self.join()
+        try:
+            self.kill(exception)
+            self.join()
+        except:
+            pass
 
     def is_dead(self):
         return self.death.is_set()
