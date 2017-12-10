@@ -32,8 +32,12 @@ class Result(threading.Event):
 
         raise TimeoutError('result timed out')
 
-    def set_exception(self):
-        self.exception = sys.exc_info()
+    def set_exception(self, exception=None):
+        if not exception is None:
+            self.exception = exception
+        else:
+            self.exception = sys.exc_info()
+
         self.set()
 
     def raise_exception(self):
