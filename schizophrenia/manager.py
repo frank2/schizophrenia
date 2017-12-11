@@ -276,10 +276,10 @@ class Manager(object):
                 if self.tid >= self.MAX_TID:
                     self.tid = 0
 
-        tid_obj = TID(self, self.tid)
+            tid_obj = TID(self, self.tid)
             
-        self.tids[tid_obj] = task_obj
-        self.tasks[task_obj] = tid_obj
+            self.tids[tid_obj] = task_obj
+            self.tasks[task_obj] = tid_obj
 
         return tid_obj
 
