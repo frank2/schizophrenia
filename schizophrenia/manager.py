@@ -135,6 +135,9 @@ class Pipe(object):
         if not isinstance(tid_one, TID) or not isinstance(tid_two, TID):
             raise ValueError('tid must be a TID object')
 
+        if tid_one == tid_two:
+            raise ValueError('tid cannot connect to itself')
+
         self.one = PipeEnd()
         self.two = PipeEnd(send=self.one.recv, recv=self.one.send)
         self.key = frozenset([tid_one, tid_two])
@@ -187,6 +190,7 @@ class Manager(object):
 
         self.pipes = dict()
         self.pipe_ends = dict()
+        self.tid_lock = threading.RLock()
 
         self.tid = 0
 
@@ -223,7 +227,7 @@ class Manager(object):
             self.reload_module(loaded, False)
 
     def unload_module(self, loaded):
-        del self.modules[loaded]
+        self.modules.pop(loaded, None)
 
     def load_task(self, task_string):
         modules = task_string.split('.')
@@ -265,20 +269,17 @@ class Manager(object):
         if task_obj in self.tasks:
             raise RuntimeError('task already registered with manager')
 
-        tid = self.tid
+        with self.tid_lock:
+            while self.tid in self.tids:
+                self.tid += 1
 
-        while tid in self.tids:
-            tid += 1
-
-            if tid >= self.MAX_TID:
-                tid = 0
+                if self.tid >= self.MAX_TID:
+                    self.tid = 0
 
         tid_obj = TID(self, self.tid)
             
         self.tids[tid_obj] = task_obj
         self.tasks[task_obj] = tid_obj
-
-        self.tid = tid
 
         return tid_obj
 
@@ -288,14 +289,18 @@ class Manager(object):
 
         tid_obj = self.tasks[task_obj]
 
-        del self.tids[tid_obj]
-        del self.tasks[task_obj]
+        self.tids.pop(tid_obj, None)
+        self.tasks.pop(task_obj, None)
 
         if tid_obj in self.pipe_ends:
             ends = self.pipe_ends[tid_obj]
 
             for end in list(ends)[:]:
                 self.close_pipe(tid_obj, end)
+
+    def kill_task(self, tid, exception=None):
+        task = self.tids.get(tid)
+        task.on_kill(exception)
 
     def launch_task(self, task_obj, *args, **kwargs):
         tid_obj = self.register_task(task_obj)
@@ -342,10 +347,13 @@ class Manager(object):
 
         if self.has_pipe_connection(first, second):
             return self.get_pipe(first, second)
-            
+
+        #if first == second:
+        #    print(first, second)
+
         pipe = Pipe(first, second)
         ends = list(pipe.key)
-
+        #print(pipe.key)
         self.pipes[pipe.key] = pipe
 
         self.pipe_ends.setdefault(ends[0], set()).add(ends[1])
@@ -424,11 +432,11 @@ class Manager(object):
         self.pipe_ends[tid_one].remove(tid_two)
 
         if len(self.pipe_ends[tid_one]) == 0:
-            del self.pipe_ends[tid_one]
+            self.pipe_ends.pop(tid_one, None)
 
         self.pipe_ends[tid_two].remove(tid_one)
 
         if len(self.pipe_ends[tid_two]) == 0:
-            del self.pipe_ends[tid_two]
+            self.pipe_ends.pop(tid_two, None)
 
 MANAGER = Manager()

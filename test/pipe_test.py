@@ -68,12 +68,17 @@ class MasterTask(Task):
 class SlaveTask(Task):
     def task(self):
         # find the master task and create the pipe
-        master = list(filter(lambda x: isinstance(x, MasterTask), self.manager.get_tasks()))
+        print('Spawned {}'.format(self.thread_name))
+        master = list(map(lambda x: x.task, filter(lambda x: isinstance(x.task, MasterTask), self.manager.get_tids())))
 
         while len(master) == 0:
+            #print('{} waiting for master'.format(self.thread_name))
             self.sleep(0.01)
-            master = list(filter(lambda x: isinstance(x, MasterTask), self.manager.get_tasks()))
+            master = list(map(lambda x: x.task, filter(lambda x: isinstance(x.task, MasterTask), self.manager.get_tids())))
 
+        print(master)
+        print('master: {}'.format(master[0].tid))
+        print('self: {}'.format(self.tid))
         master = master[0]
         pipe = self.create_pipe(master.tid)
 
@@ -110,13 +115,13 @@ class SlaveTask(Task):
         print('{} is done.'.format(self.thread_name))
 
 if __name__ == '__main__':
-    stacktracer.trace_start('trace.html', 5, True)
+    stacktracer.trace_start('trace.html', 3, True)
     mgr = find_manager()
     mgr.load_module('__main__')
     master_tid = mgr.spawn_task('__main__.MasterTask')
     children = [mgr.spawn_task('__main__.SlaveTask') for i in range(50)]
 
-    for i in range(10):
+    for i in range(15):
         time.sleep(1)
 
     print('Killing everything.')
@@ -126,7 +131,6 @@ if __name__ == '__main__':
             child.die()
 
     master_tid.die()
-
     print(master_tid.is_alive())
 
     stacktracer.trace_stop()

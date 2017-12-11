@@ -100,6 +100,12 @@ class Task(object):
         if tid in self.pipes:
             del self.pipes[tid]
 
+    def on_kill(self, exception=None):
+        if exception:
+            self.exception = exception
+
+        self.death.set()
+
     def get_pipe(self, tid):
         #with self.pipe_lock:
         return self.pipes.get(tid, None)
@@ -196,17 +202,14 @@ class Task(object):
             task.join()
 
     def kill(self, exception=None):
-        if exception:
-            self.exception = exception
+        if not self.is_alive():
+            raise RuntimeError('task is not running')
 
-        self.death.set()
+        self.manager.kill_task(self.tid, exception)
 
     def die(self, exception=None):
-        try:
-            self.kill(exception)
-            self.join()
-        except:
-            pass
+        self.kill(exception)
+        self.join()
 
     def is_dead(self):
         return self.death.is_set()
