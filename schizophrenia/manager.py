@@ -305,7 +305,7 @@ class Manager(object):
     def launch_task(self, task_obj, *args, **kwargs):
         tid_obj = self.register_task(task_obj)
         task_obj.run(*args, **kwargs)
-        return tid_obj
+        return task_obj
 
     def spawn_task(self, task_name, *args, **kwargs):
         return self.launch_task(self.create_task(task_name), *args, **kwargs)
