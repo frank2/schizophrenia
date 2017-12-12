@@ -316,7 +316,7 @@ class Manager(object):
 
     def launch_task_shell(self, task_obj, arg_string):
         task_args, task_kwargs = task_obj.prototype.from_string(arg_string)
-        self.launch_task(task_obj, *task_args, **task_kwargs)
+        return self.launch_task(task_obj, *task_args, **task_kwargs)
         
     def spawn_task(self, task_name, *args, **kwargs):
         return self.launch_task(self.create_task(task_name), *args, **kwargs)
