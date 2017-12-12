@@ -322,7 +322,7 @@ class Manager(object):
         return self.launch_task(self.create_task(task_name), *args, **kwargs)
 
     def spawn_task_shell(self, task_name, arg_string):
-        return self.launch_task(self.create_task(task_name), *args, **kwargs)
+        return self.launch_task_shell(self.create_task(task_name), arg_string)
 
     def spawn_task_after(self, timeout, taskname, *args, **kwargs):
         task_obj = self.create_task(task_name)
