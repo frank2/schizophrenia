@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import inspect
 import queue
 import sys
 import threading
@@ -7,10 +8,92 @@ import time
 
 from schizophrenia.result import Result, WouldBlockError
 
-__all__ = ['TaskExit', 'TaskResult', 'Task']
+__all__ = ['TaskExit', 'TaskPrototypeArgs', 'TaskPrototypeKwargs', 'TaskPrototype', 'TaskResult', 'Task']
 
 class TaskExit(Exception):
     pass
+
+class TaskPrototypeArgs(object):
+    TYPE_CLASS = None
+
+    def __init__(self, **kwargs):
+        self.type_class = kwargs.setdefault('type_class', self.TYPE_CLASS)
+
+        if not callable(self.type_class):
+            raise ValueError('type class must be callable')
+
+    def __call__(self, arg):
+        if self.type_class is None:
+            return arg
+        else:
+            return self.type_class(arg)
+
+class TaskPrototypeKwargs(object):
+    TYPE_MAP = None
+
+    def __init__(self, **kwargs):
+        self.type_map = kwargs.set_default('type_map', self.TYPE_MAP)
+
+        if self.type_map is None:
+            self.type_map = dict()
+
+    def __call__(self, key, arg):
+        if not key in self.type_map:
+            return arg
+        else:
+            return self.type_map[key](arg)
+
+class TaskPrototype(object):
+    def __init__(self, *args):
+        self.args = list()
+
+        for arg in args:
+            if not callable(arg):
+                raise ValueError('prototype arg must be callable')
+
+            self.args.append(arg)
+
+    def parse_args(self, *args, **kwargs):
+        prototype_args = self.args[:]
+
+        args_list_proto = None
+        kwargs_list_proto = None
+        new_args = list()
+        new_kwargs = dict()
+
+        while len(args) > 0:
+            proto = prototype_args.pop(0)
+
+            if isinstance(proto, TaskPrototypeArgs):
+                args_list_proto = proto
+            elif isinstance(proto, TaskPrototypeKwargs):
+                raise RuntimeError('kwargs arrived before args were parsed')
+
+            arg = args.pop(0)
+
+            if not args_list_proto is None:
+                new_arg = args_list_proto(arg)
+            else:
+                new_arg = proto(arg)
+
+            new_args.append(new_arg)
+
+        if len(args) > 0:
+            raise RuntimeError('not all args were parsed')
+
+        if len(kwargs) == 0:
+            return (new_args, new_kwargs)
+
+        if not isinstance(prototype_args[0], TaskPrototypeKwargs):
+            raise RuntimeError('reached kwargs but final arg prototype is not TaskPrototypeKwargs')
+
+        kwargs_list_proto = prototype_args[0]
+
+        for k in kwargs:
+            v = kwargs[k]
+            new_kwargs[k] = kwargs_list_proto(k, v)
+
+        return (new_args, new_kwargs)
 
 class TaskResult(Result):
     def __init__(self, task):
