@@ -69,12 +69,12 @@ class SlaveTask(Task):
     def task(self):
         # find the master task and create the pipe
         print('Spawned {}'.format(self.thread_name))
-        master = list(map(lambda x: x.task, filter(lambda x: isinstance(x.task, MasterTask), self.manager.get_tids())))
+        master = list(filter(lambda x: isinstance(x, MasterTask), self.manager.get_tasks()))
 
         while len(master) == 0:
             #print('{} waiting for master'.format(self.thread_name))
             self.sleep(0.01)
-            master = list(map(lambda x: x.task, filter(lambda x: isinstance(x.task, MasterTask), self.manager.get_tids())))
+            master = list(filter(lambda x: isinstance(x, MasterTask), self.manager.get_tasks()))
 
         print(master)
         print('master: {}'.format(master[0].tid))
@@ -118,7 +118,7 @@ if __name__ == '__main__':
     stacktracer.trace_start('trace.html', 3, True)
     mgr = find_manager()
     mgr.load_module('__main__')
-    master_tid = mgr.spawn_task('__main__.MasterTask')
+    master_task = mgr.spawn_task('__main__.MasterTask')
     children = [mgr.spawn_task('__main__.SlaveTask') for i in range(50)]
 
     for i in range(15):
@@ -130,7 +130,7 @@ if __name__ == '__main__':
         if child.is_alive():
             child.die()
 
-    master_tid.die()
-    print(master_tid.is_alive())
+    master_task.die()
+    print(master_task.is_alive())
 
     stacktracer.trace_stop()
