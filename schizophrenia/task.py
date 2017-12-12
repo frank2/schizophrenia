@@ -1,14 +1,17 @@
 #!/usr/bin/env python
 
+import functools
 import inspect
 import queue
+import re
+import shlex
 import sys
 import threading
 import time
 
 from schizophrenia.result import Result, WouldBlockError
 
-__all__ = ['TaskExit', 'TaskPrototypeArgs', 'TaskPrototypeKwargs', 'TaskPrototype', 'TaskResult', 'Task']
+__all__ = ['TaskExit', 'TaskPrototypeArgs', 'TaskPrototypeKwargs', 'TaskPrototype', 'TaskPrototypeEnforcer', 'enforce_prototype', 'TaskResult', 'Task']
 
 class TaskExit(Exception):
     pass
@@ -19,7 +22,7 @@ class TaskPrototypeArgs(object):
     def __init__(self, **kwargs):
         self.type_class = kwargs.setdefault('type_class', self.TYPE_CLASS)
 
-        if not callable(self.type_class):
+        if not self.type_class is None and not callable(self.type_class):
             raise ValueError('type class must be callable')
 
     def __call__(self, arg):
@@ -32,7 +35,7 @@ class TaskPrototypeKwargs(object):
     TYPE_MAP = None
 
     def __init__(self, **kwargs):
-        self.type_map = kwargs.set_default('type_map', self.TYPE_MAP)
+        self.type_map = kwargs.setdefault('type_map', self.TYPE_MAP)
 
         if self.type_map is None:
             self.type_map = dict()
@@ -54,7 +57,8 @@ class TaskPrototype(object):
             self.args.append(arg)
 
     def parse_args(self, *args, **kwargs):
-        prototype_args = self.args[:]
+        args = list(args)
+        prototype_args = list(self.args[:])
 
         args_list_proto = None
         kwargs_list_proto = None
@@ -67,10 +71,14 @@ class TaskPrototype(object):
             if isinstance(proto, TaskPrototypeArgs):
                 args_list_proto = proto
             elif isinstance(proto, TaskPrototypeKwargs):
+                if isinstance(args_list_proto, TaskPrototypeArgs):
+                    kwargs_list_proto = proto
+                    break
+                
                 raise RuntimeError('kwargs arrived before args were parsed')
 
             arg = args.pop(0)
-
+            
             if not args_list_proto is None:
                 new_arg = args_list_proto(arg)
             else:
@@ -78,16 +86,14 @@ class TaskPrototype(object):
 
             new_args.append(new_arg)
 
-        if len(args) > 0:
+        if len(prototype_args) > 0:
             raise RuntimeError('not all args were parsed')
 
         if len(kwargs) == 0:
             return (new_args, new_kwargs)
 
-        if not isinstance(prototype_args[0], TaskPrototypeKwargs):
-            raise RuntimeError('reached kwargs but final arg prototype is not TaskPrototypeKwargs')
-
-        kwargs_list_proto = prototype_args[0]
+        if kwargs_list_proto is None:
+            raise RuntimeError('reached kwargs without kwargs to parse')
 
         for k in kwargs:
             v = kwargs[k]
@@ -95,6 +101,54 @@ class TaskPrototype(object):
 
         return (new_args, new_kwargs)
 
+    def from_string(self, string):
+        lexed = shlex.split(string)
+        args = list()
+        kwargs = dict()
+
+        parsing = args
+
+        for elem in lexed:
+            if parsing == args:
+                if re.match('^[a-zA-Z_][a-zA-Z0-9]+=(.*)$', elem):
+                    parsing = kwargs
+                else:
+                    parsing.append(elem)
+                    
+            if parsing == kwargs:
+                groups = re.match('^(?P<key>[a-zA-Z_][a-zA-Z0-9]+)=(?P<value>.*)$', elem)
+
+                if groups is None:
+                    raise ValueError('keyword argument {} is not a keyword argument'.format(elem))
+
+                key = groups.group('key')
+                value = groups.group('value')
+                value = value.strip("'")
+                value = value.strip('"')
+
+                parsing[key] = value
+
+        return self.parse_args(*args, **kwargs)
+
+class TaskPrototypeEnforcer(object):
+    def __init__(self, wrapping):
+        self.wrapping = wrapping
+
+    def __get__(self, obj, klass=None):
+        if klass is None:
+            klass = type(obj)
+
+        @functools.wraps(self.wrapping)
+        def wrapper(*args, **kwargs):
+            proto = obj.prototype
+            parsed_args, parsed_kwargs = proto.parse_args(*args, **kwargs)
+            return self.wrapping(obj, *parsed_args, **parsed_kwargs)
+                
+        return wrapper
+
+def enforce_prototype(wrapping):
+    return TaskPrototypeEnforcer(wrapping)
+                                  
 class TaskResult(Result):
     def __init__(self, task):
         self.task = task
@@ -140,10 +194,13 @@ class TaskResult(Result):
         return super(TaskResult, self).get(blocking, timeout)
 
 class Task(object):
-    def __init__(self, manager=None):
+    MANAGER = None
+    PROTOTYPE = TaskPrototype(TaskPrototypeArgs(), TaskPrototypeKwargs())
+    
+    def __init__(self, **kwargs):
         from schizophrenia.manager import Manager, find_manager
 
-        self.manager = manager
+        self.manager = kwargs.setdefault('manager', self.MANAGER)
 
         if not self.manager is None and not isinstance(self.manager, Manager):
             raise ValueError('manager must be a Manager object')
@@ -153,6 +210,11 @@ class Task(object):
 
         if self.manager is None:
             raise ValueError('no manager could be found')
+
+        self.prototype = kwargs.setdefault('prototype', self.PROTOTYPE)
+
+        if self.prototype is None:
+            raise ValueError('prototype cannot be None')
         
         self.thread = None
         self.result = TaskResult(self)
@@ -293,6 +355,10 @@ class Task(object):
     def die(self, exception=None):
         self.kill(exception)
         self.join()
+
+    def die_after(self, timeout, exception=None):
+        timer = threading.Timer(timeout, self.die, args=[exception])
+        timer.start()
 
     def is_dead(self):
         return self.death.is_set()

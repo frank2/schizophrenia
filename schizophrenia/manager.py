@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 
 import functools
+import importlib
 import queue
+import shlex
 import sys
 import threading
 import types
@@ -212,7 +214,7 @@ class Manager(object):
 
         while len(attribute_queue) > 0:
             dequeued = attribute_queue.pop(0)
-            reload(dequeued)
+            importlib.reload(dequeued)
             reloaded_set.add(dequeued)
             
             attrs = dir(dequeued)
@@ -312,11 +314,23 @@ class Manager(object):
         task_obj.run(*args, **kwargs)
         return task_obj
 
+    def launch_task_shell(self, task_obj, arg_string):
+        task_args, task_kwargs = task_obj.prototype.from_string(arg_string)
+        self.launch_task(task_obj, *task_args, **task_kwargs)
+        
     def spawn_task(self, task_name, *args, **kwargs):
+        return self.launch_task(self.create_task(task_name), *args, **kwargs)
+
+    def spawn_task_shell(self, task_name, arg_string):
         return self.launch_task(self.create_task(task_name), *args, **kwargs)
 
     def spawn_task_after(self, timeout, taskname, *args, **kwargs):
         task_obj = self.create_task(task_name)
+        task_obj.run_after(timeout, *args, **kwargs)
+
+    def spawn_task_shell_after(self, timeout, taskname, arg_string):
+        task_obj = self.create_task(task_name)
+        task_args, task_kwargs = task_obj.prototype.from_string(arg_string)
         task_obj.run_after(timeout, *args, **kwargs)
 
     def has_tid(self, tid):
