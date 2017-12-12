@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import functools
 import queue
 import sys
 import threading
@@ -302,7 +303,7 @@ class Manager(object):
 
     def create_task(self, task_name, *args, **kwargs):
         task_class = self.load_task(task_name)
-        obj = task_class(self, *args, **kwargs)
+        obj = functools.partial(task_class, manager=self)(*args, **kwargs)
 
         return obj
 
@@ -433,14 +434,20 @@ class Manager(object):
         if not tid_two_task is None:
             tid_two_task.on_close_pipe(tid_one, pipe)
 
-        self.pipe_ends[tid_one].remove(tid_two)
+        end_set = self.pipe_ends.get(tid_one, None)
 
-        if len(self.pipe_ends[tid_one]) == 0:
-            self.pipe_ends.pop(tid_one, None)
+        if not end_set is None:
+            end_set.remove(tid_two)
 
-        self.pipe_ends[tid_two].remove(tid_one)
+            if len(end_set) == 0:
+                self.pipe_ends.pop(tid_one, None)
 
-        if len(self.pipe_ends[tid_two]) == 0:
-            self.pipe_ends.pop(tid_two, None)
+        end_set = self.pipe_ends.get(tid_two, None)
+
+        if not end_set is None:
+            end_set.remove(tid_one)
+
+            if len(end_set) == 0:
+                self.pipe_ends.pop(tid_two, None)
 
 MANAGER = Manager()

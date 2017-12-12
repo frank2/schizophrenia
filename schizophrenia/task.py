@@ -57,10 +57,10 @@ class TaskResult(Result):
         return super(TaskResult, self).get(blocking, timeout)
 
 class Task(object):
-    def __init__(self, manager_obj=None):
+    def __init__(self, manager=None):
         from schizophrenia.manager import Manager, find_manager
 
-        self.manager = manager_obj
+        self.manager = manager
 
         if not self.manager is None and not isinstance(self.manager, Manager):
             raise ValueError('manager must be a Manager object')
