@@ -259,12 +259,6 @@ class Manager(object):
 
         return task_class
 
-    def create_task(self, task_name):
-        task_class = self.load_task(task_name)
-        obj = task_class(self)
-
-        return obj
-
     def register_task(self, task_obj):
         if task_obj in self.tasks:
             raise RuntimeError('task already registered with manager')
@@ -287,13 +281,17 @@ class Manager(object):
         if not task_obj in self.tasks:
             raise RuntimeError('task not registered with manager')
 
-        tid_obj = self.tasks[task_obj]
+        tid_obj = self.tasks.get(task_obj, None)
 
-        self.tids.pop(tid_obj, None)
-        self.tasks.pop(task_obj, None)
+        if not tid_obj is None: # race condition, feel free to just let it go.
+            self.tids.pop(tid_obj, None)
+            self.tasks.pop(task_obj, None)
 
         if tid_obj in self.pipe_ends:
-            ends = self.pipe_ends[tid_obj]
+            ends = self.pipe_ends.pop(tid_obj, None)
+
+            if ends is None:
+                return
 
             for end in list(ends)[:]:
                 self.close_pipe(tid_obj, end)
@@ -301,6 +299,12 @@ class Manager(object):
     def kill_task(self, tid, exception=None):
         task = self.tids.get(tid)
         task.on_kill(exception)
+
+    def create_task(self, task_name, *args, **kwargs):
+        task_class = self.load_task(task_name)
+        obj = task_class(self, *args, **kwargs)
+
+        return obj
 
     def launch_task(self, task_obj, *args, **kwargs):
         tid_obj = self.register_task(task_obj)
