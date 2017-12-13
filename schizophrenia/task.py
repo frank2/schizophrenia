@@ -70,6 +70,7 @@ class TaskPrototype(object):
 
             if isinstance(proto, TaskPrototypeArgs):
                 args_list_proto = proto
+                break
             elif isinstance(proto, TaskPrototypeKwargs):
                 if isinstance(args_list_proto, TaskPrototypeArgs):
                     kwargs_list_proto = proto
@@ -86,11 +87,22 @@ class TaskPrototype(object):
 
             new_args.append(new_arg)
 
-        if len(prototype_args) > 0:
+        if len(prototype_args) > 0 and not isinstance(proto, TaskPrototypeArgs):
             raise RuntimeError('not all args were parsed')
 
+        if args_list_proto is None:
+            raise RuntimeError('too many arguments provided')
+        
+        while len(args) > 0:
+            arg = args.pop(0)
+            new_arg = args_list_proto(arg)
+            new_args.append(new_arg)
+            
         if len(kwargs) == 0:
             return (new_args, new_kwargs)
+
+        if len(prototype_args) and isinstance(prototype_args[0], TaskPrototypeKwargs):
+            kwargs_list_proto = prototype_args.pop(0)
 
         if kwargs_list_proto is None:
             raise RuntimeError('reached kwargs without kwargs to parse')
