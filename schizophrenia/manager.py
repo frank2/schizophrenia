@@ -213,16 +213,23 @@ class Manager(object):
         reloaded_set = set()
 
         while len(attribute_queue) > 0:
+            #print(attribute_queue)
             dequeued = attribute_queue.pop(0)
-            importlib.reload(dequeued)
-            reloaded_set.add(dequeued)
+            #print(dequeued)
+            
+            try:
+                importlib.reload(dequeued)
+            except NotImplementedError:
+                continue
+            finally:
+                reloaded_set.add(dequeued)
             
             attrs = dir(dequeued)
 
             for attribute_name in attrs:
                 attribute = getattr(dequeued, attribute_name)
                 
-                if type(attribute) is ModuleType and not attribute in reloaded_set:
+                if type(attribute) is types.ModuleType and not attribute in reloaded_set:
                     attribute_queue.append(attribute)
 
         # get those pesky circular links too
