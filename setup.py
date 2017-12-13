@@ -4,7 +4,7 @@ from setuptools import setup
 
 setup(
     name = 'schizophrenia'
-    ,version = '0.2.6'
+    ,version = '0.2.7'
     ,author = 'frank2'
     ,author_email = 'frank2@dc949.org'
     ,description = 'A task-based threading library based on Python threads.'

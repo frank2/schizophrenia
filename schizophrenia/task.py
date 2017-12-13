@@ -375,6 +375,9 @@ class Task(object):
         self.manager.kill_task(self.tid, exception)
 
     def die(self, exception=None):
+        if not self.is_alive():
+            return
+
         self.kill(exception)
         self.join()
 
