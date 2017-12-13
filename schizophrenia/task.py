@@ -57,7 +57,6 @@ class TaskPrototype(object):
             self.args.append(arg)
 
     def parse_args(self, *args, **kwargs):
-        print(args, kwargs)
         args = list(args)
         prototype_args = list(self.args[:])
 
