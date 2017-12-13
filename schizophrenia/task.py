@@ -57,6 +57,7 @@ class TaskPrototype(object):
             self.args.append(arg)
 
     def parse_args(self, *args, **kwargs):
+        print(args, kwargs)
         args = list(args)
         prototype_args = list(self.args[:])
 
@@ -90,7 +91,7 @@ class TaskPrototype(object):
         if len(prototype_args) > 0 and args_list_proto is None:
             raise RuntimeError('not all args were parsed')
 
-        if args_list_proto is None:
+        if len(args) > 0 and args_list_proto is None:
             raise RuntimeError('too many arguments provided')
         
         while len(args) > 0:
@@ -147,13 +148,23 @@ class TaskPrototypeEnforcer(object):
         self.wrapping = wrapping
 
     def __get__(self, obj, klass=None):
+        self.scope = obj # make the object stay in scope without a global
+    
         if klass is None:
-            klass = type(obj)
-
+            klass = type(fuckyou)
+        
         @functools.wraps(self.wrapping)
         def wrapper(*args, **kwargs):
-            proto = obj.prototype
+            proto = klass.PROTOTYPE
+            obj = self.scope
+
+            if obj is None and not klass is None:
+                args = list(args)
+                obj = args.pop(0)
+                args = tuple(args)
+                
             parsed_args, parsed_kwargs = proto.parse_args(*args, **kwargs)
+
             return self.wrapping(obj, *parsed_args, **parsed_kwargs)
                 
         return wrapper
