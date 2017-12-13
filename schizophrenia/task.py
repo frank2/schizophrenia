@@ -87,7 +87,7 @@ class TaskPrototype(object):
 
             new_args.append(new_arg)
 
-        if len(prototype_args) > 0 and not isinstance(proto, TaskPrototypeArgs):
+        if len(prototype_args) > 0 and args_list_proto is None:
             raise RuntimeError('not all args were parsed')
 
         if args_list_proto is None:
