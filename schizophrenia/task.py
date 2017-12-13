@@ -424,8 +424,8 @@ class Task(object):
             self.result.set()
         except:
             self.result.set_exception()
-            import traceback
-            traceback.print_exc()
+            #import traceback
+            #traceback.print_exc()
 
         if self.manager and self.manager.has_task(self):
             self.manager.unregister_task(self)
