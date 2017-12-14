@@ -340,7 +340,7 @@ class Manager(object):
     def spawn_task_shell_after(self, timeout, taskname, arg_string):
         task_obj = self.create_task(taskname)
         task_args, task_kwargs = task_obj.prototype.from_string(arg_string)
-        task_obj.run_after(timeout, *args, **kwargs)
+        task_obj.run_after(timeout, *task_args, **task_kwargs)
 
         return task_obj
 
