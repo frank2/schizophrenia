@@ -59,59 +59,60 @@ class TaskPrototype(object):
     def parse_args(self, *args, **kwargs):
         args = list(args)
         prototype_args = list(self.args[:])
+        args_result = list()
+        kwargs_result = dict()
 
-        args_list_proto = None
-        kwargs_list_proto = None
-        new_args = list()
-        new_kwargs = dict()
+        state_pos = 0
+        state_args = 1
+        state_kwargs = 2
 
-        while len(args) > 0:
-            proto = prototype_args.pop(0)
+        parse_state = state_pos
 
-            if isinstance(proto, TaskPrototypeArgs):
-                args_list_proto = proto
-                break
-            elif isinstance(proto, TaskPrototypeKwargs):
-                if isinstance(args_list_proto, TaskPrototypeArgs):
-                    kwargs_list_proto = proto
-                    break
+        while len(prototype_args) > 0:
+            if parse_state == state_pos:
+                proto = prototype_args.pop(0)
+
+                if isinstance(proto, TaskPrototypeArgs):
+                    prototype_args.insert(0, proto)
+                    parse_state = state_args
+                    continue
+                elif isinstance(proto, TaskPrototypeKwargs):
+                    prototype_kwargs.insert(0, proto)
+                    parse_state = state_kwargs
+                    continue
+
+                if len(args) == 0:
+                    raise RuntimeError('ran out of positional arguments to parse')
                 
-                raise RuntimeError('kwargs arrived before args were parsed')
+                args_result.append(proto(args.pop(0)))
+            elif parse_state == state_args:
+                if len(args) == 0:
+                    proto = prototype_args.pop(0)
 
-            arg = args.pop(0)
-            
-            if not args_list_proto is None:
-                new_arg = args_list_proto(arg)
-            else:
-                new_arg = proto(arg)
+                    if len(prototype_args) == 0:
+                        break
 
-            new_args.append(new_arg)
+                    if not isinstance(prototype_args[0], TaskPrototypeKwargs):
+                        raise ValueError('the only prototype that can follow TaskPrototypeArgs is TaskPrototypeKwargs')
 
-        if len(prototype_args) > 0 and args_list_proto is None:
-            raise RuntimeError('not all args were parsed')
+                    parse_state = state_kwargs
+                    continue
 
-        if len(args) > 0 and args_list_proto is None:
-            raise RuntimeError('too many arguments provided')
-        
-        while len(args) > 0:
-            arg = args.pop(0)
-            new_arg = args_list_proto(arg)
-            new_args.append(new_arg)
-            
-        if len(kwargs) == 0:
-            return (new_args, new_kwargs)
+                proto = prototype_args[0]
+                args_result.append(proto(args.pop(0)))
+            elif parse_state == state_kwargs:
+                proto = prototype_args[0]
 
-        if len(prototype_args) and isinstance(prototype_args[0], TaskPrototypeKwargs):
-            kwargs_list_proto = prototype_args.pop(0)
+                if len(kwargs) == 0:
+                    break
 
-        if kwargs_list_proto is None:
-            raise RuntimeError('reached kwargs without kwargs to parse')
+                k, v = kwargs.popitem()
+                kwargs_result[k] = proto(k, v)
 
-        for k in kwargs:
-            v = kwargs[k]
-            new_kwargs[k] = kwargs_list_proto(k, v)
+        if len(args) > 0:
+            raise RuntimeError('not all arguments parsed')
 
-        return (new_args, new_kwargs)
+        return tuple(args_result), kwargs_result
 
     def from_string(self, string):
         lexed = shlex.split(string)
